@@ -1,0 +1,8 @@
+# 敏感配置
+config.json
+.workorder_config.json
+.workorder_project.txt
+
+# 系统文件
+.DS_Store
+Thumbs.db

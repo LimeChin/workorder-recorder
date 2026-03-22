@@ -1,0 +1,109 @@
+#!/bin/bash
+
+# ========================================
+# Work Order Code Recorder - Git Hook
+# ========================================
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+# 加载配置
+CONFIG_FILE="$SCRIPT_DIR/config.json"
+if [ ! -f "$CONFIG_FILE" ]; then
+    echo "Config file not found: $CONFIG_FILE"
+    exit 1
+fi
+
+# 读取配置
+API_KEY=$(grep -o '"api_key": "[^"]*"' "$CONFIG_FILE" | cut -d'"' -f4)
+API_URL=$(grep -o '"api_url": "[^"]*"' "$CONFIG_FILE" | cut -d'"' -f4)
+MODEL=$(grep -o '"model": "[^"]*"' "$CONFIG_FILE" | cut -d'"' -f4)
+WORKORDER_FILE=$(grep -o '"workorder_file": "[^"]*"' "$CONFIG_FILE" | cut -d'"' -f4)
+OUTPUT_DIR=$(grep -o '"output_dir": "[^"]*"' "$CONFIG_FILE" | cut -d'"' -f4)
+
+# 获取工单号
+WORKORDER=$(cat "$WORKORDER_FILE" 2>/dev/null | grep -o '"current_workorder": "[^"]*"' | cut -d'"' -f4)
+
+if [ -z "$WORKORDER" ]; then
+    echo "No work order set, skip recording"
+    exit 0
+fi
+
+# 获取分支名
+BRANCH=$(git branch --show-current)
+if [ -z "$BRANCH" ]; then
+    BRANCH=$(git rev-parse --short HEAD)
+fi
+
+# 获取commit信息
+COMMIT_MSG=$(git log -1 --pretty=%s)
+COMMIT_HASH=$(git rev-parse --short HEAD)
+COMMIT_AUTHOR=$(git log -1 --pretty=%an)
+COMMIT_DATE=$(git log -1 --pretty=%ci)
+
+# 获取修改的文件
+FILES=$(git diff-tree --no-commit-id --name-only -r HEAD)
+
+if [ -z "$FILES" ]; then
+    exit 0
+fi
+
+# 获取git diff (用于历史记录)
+GIT_DIFF=$(git diff HEAD~1 HEAD)
+
+# 对 GIT_DIFF 进行 JSON 转义 (用于 API 调用)
+GIT_DIFF_ESCAPED=$(echo "$GIT_DIFF" | perl -pe '
+    s/\\/\\\\/g;
+    s/"/\\"/g;
+    s/\n/\\n/g;
+    s/\r/\\r/g;
+    s/\t/\\t/g;
+')
+
+# 调用AI API生成总结
+API_RESPONSE=$(curl -s "$API_URL" \
+    -H "Content-Type: application/json" \
+    -H "x-api-key: $API_KEY" \
+    -H "anthropic-version: 2023-06-01" \
+    -d "{
+        \"model\": \"$MODEL\",
+        \"max_tokens\": 1024,
+        \"messages\": [{
+            \"role\": \"user\",
+            \"content\": \"请用简洁的中文总结以下代码修改内容，说明改了什么、为什么改、有什么效果。不要输出代码，只输出总结文字。\\n\\n---\\n$GIT_DIFF_ESCAPED\\n---\"
+        }]
+    }" 2>/dev/null)
+
+# 解析 JSON 响应
+AI_SUMMARY=$(echo "$API_RESPONSE" | perl "$SCRIPT_DIR/parse_json.pl" | perl -pe 's/\s+$//')
+
+if [ -z "$AI_SUMMARY" ]; then
+    AI_SUMMARY="AI总结生成失败"
+    echo "[$(date)] API Response: $API_RESPONSE" >> ~/.workorder_debug.log
+fi
+
+# 创建目录
+TARGET_DIR="$OUTPUT_DIR/$BRANCH/$WORKORDER"
+mkdir -p "$TARGET_DIR"
+
+# 文件名使用需求名（commit message），同一个需求的迭代在同一个文件
+# 提取冒号前的部分作为文件名，如果没有冒号则使用完整 message
+SAFE_NAME=$(echo "$COMMIT_MSG" | sed 's/[：:].*//' | sed 's/[<>:"/\\|?*]/_/g' | cut -c1-100)
+TARGET_FILE="$TARGET_DIR/$SAFE_NAME.md"
+
+# 对 GIT_DIFF 进行转义（用于传递给 perl 脚本）
+GIT_DIFF_ESCAPED_FOR_PERL=$(echo "$GIT_DIFF" | perl -pe 's/\x27/\\\x27/g')
+
+# 调用 perl 脚本更新 MD 文件
+perl "$SCRIPT_DIR/update_md.pl" \
+    "$TARGET_FILE" \
+    "$COMMIT_HASH" \
+    "$COMMIT_MSG" \
+    "$COMMIT_AUTHOR" \
+    "$COMMIT_DATE" \
+    "$BRANCH" \
+    "$WORKORDER" \
+    "$AI_SUMMARY" \
+    "$GIT_DIFF_ESCAPED_FOR_PERL" \
+    "$FILES"
+
+echo "Code saved: $TARGET_FILE"
