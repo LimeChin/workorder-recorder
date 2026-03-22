@@ -56,14 +56,14 @@ echo ================================================
 echo           Select Git Repo
 echo ================================================
 echo.
-echo Scanning...
+echo Scanning D:\winchannel...
 echo.
 set count=0
-for /f "delims=" %%d in ('dir /b /ad 2^>nul') do (
+for /d %%d in (D:\winchannel\*) do (
     if exist "%%d\.git" (
         set /a count+=1
-        set "repo!count!=%%~fd"
-        echo   [!count!] %%d
+        set "repo!count!=%%d"
+        for %%i in (%%d) do echo   [!count!] %%~ni
     )
 )
 echo.

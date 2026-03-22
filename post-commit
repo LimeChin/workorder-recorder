@@ -4,7 +4,7 @@
 # Work Order Code Recorder - Git Hook
 # ========================================
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+SCRIPT_DIR="/c/Users/MR/Desktop/workorder-recorder"
 
 # 加载配置
 CONFIG_FILE="$SCRIPT_DIR/config.json"
